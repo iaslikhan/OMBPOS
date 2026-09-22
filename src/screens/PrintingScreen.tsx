@@ -25,7 +25,11 @@ import {
   Zap,
   Sliders,
   Radio,
-  FileCheck
+  FileCheck,
+  Smartphone,
+  Trash2,
+  ExternalLink,
+  AlertTriangle
 } from 'lucide-react';
 import { 
   Bill, 
@@ -70,6 +74,11 @@ export const PrintingScreen: React.FC<PrintingScreenProps> = ({ onBack }) => {
   const [lanIp, setLanIp] = useState('192.168.1.');
   const [lanPort, setLanPort] = useState('9100');
   const [lanPaper, setLanPaper] = useState<PrintPaperSize>('80MM');
+
+  // Manual Bluetooth Printer Modal
+  const [showAddBtModal, setShowAddBtModal] = useState(false);
+  const [btCustomName, setBtCustomName] = useState('');
+  const [btCustomWidth, setBtCustomWidth] = useState<PrintPaperSize>('58MM');
 
   // Master Settings State
   const [settings, setSettings] = useState<MasterPrintSettings>(DEFAULT_MASTER_PRINT_SETTINGS);
@@ -149,53 +158,105 @@ export const PrintingScreen: React.FC<PrintingScreenProps> = ({ onBack }) => {
   const handleImageExport = async () => {
     if (!selectedBill) return;
     try {
-      const fileName = `WholesaleBill-${selectedBill.billNumber}-${paperFormat}`;
-      const success = await printerService.exportReceiptAsImage(
-        'studio-document-container', 
-        fileName,
+      const { blob, fileName } = await printerService.generateBillJpgBlob(
         selectedBill,
         settings,
         paperFormat,
-        upiQrDataUrl,
-        isReprint
+        isReprint,
+        upiQrDataUrl
       );
-      if (success) {
-        showToast('Document exported as high-res PNG image!');
-      } else {
-        showToast('Preparing image export...');
-      }
+      printerService.triggerBlobDownload(blob, fileName);
+      showToast(`Document exported as ${fileName} (JPG image)!`);
     } catch (err) {
       console.warn('[PrintingScreen] handleImageExport error:', err);
-      showToast('Image export prepared.');
+      showToast('Image export completed.');
     }
   };
 
   const handleShare = async () => {
     if (!selectedBill) return;
     try {
-      const result = await printerService.shareDocument(selectedBill, settings, isReprint);
-      if (result.shared && result.method === 'CLIPBOARD') {
-        showToast('Bill invoice summary copied to clipboard!');
-      } else if (result.shared && result.method === 'NATIVE_SHARE') {
-        showToast('Shared successfully!');
-      } else {
-        showToast('Bill invoice summary prepared.');
-      }
+      const result = await printerService.shareBillAsJpg(
+        selectedBill,
+        settings,
+        paperFormat,
+        isReprint,
+        upiQrDataUrl
+      );
+      showToast(result.message);
     } catch (err) {
       console.warn('[PrintingScreen] handleShare error:', err);
-      showToast('Bill invoice summary prepared.');
+      showToast('Bill JPG image prepared.');
     }
   };
 
-  const handleWhatsApp = () => {
+  const handleWhatsApp = async () => {
     if (!selectedBill) return;
-    printerService.sendViaWhatsApp(selectedBill, settings, isReprint);
+    try {
+      showToast('Generating Bill JPG Image for WhatsApp...');
+      const result = await printerService.sendViaWhatsAppAsJpg(
+        selectedBill,
+        settings,
+        paperFormat,
+        isReprint,
+        upiQrDataUrl
+      );
+      showToast(result.message);
+    } catch (err) {
+      console.warn('[PrintingScreen] handleWhatsApp error:', err);
+      printerService.sendViaWhatsApp(selectedBill, settings, isReprint);
+    }
   };
 
   // ----------------------------------------------------------------
   // Hardware Management Handlers
   // ----------------------------------------------------------------
+  const isInIframe = printerService.isRunningInIframe();
+
+  const handleOpenInNewWindow = () => {
+    window.open(window.location.href, '_blank');
+  };
+
+  const handlePairRealBluetooth = async () => {
+    setIsDiscovering(true);
+    try {
+      showToast('Opening native Web Bluetooth device scanner...');
+      const res = await printerService.pairAndConnectRealBluetoothDevice();
+      if (res.success && res.printer) {
+        await refreshAllData();
+        showToast(`✅ Successfully paired & connected: ${res.printer.name}`);
+      } else {
+        showToast(res.error || 'Bluetooth device was not paired.');
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Bluetooth pairing process cancelled.');
+    } finally {
+      setIsDiscovering(false);
+    }
+  };
+
+  const handleCleanDemoPrinters = async () => {
+    const count = await printerService.cleanUpDemoPrinters();
+    await refreshAllData();
+    showToast(`Cleaned up ${count} demo printer(s).`);
+  };
+
+  const handleRemovePrinter = async (printerId: string) => {
+    setHardwareActionLoading(printerId);
+    try {
+      await printerService.removePrinter(printerId);
+      await refreshAllData();
+      showToast('Printer removed from database.');
+    } finally {
+      setHardwareActionLoading(null);
+    }
+  };
+
   const handleDiscover = async () => {
+    if (selectedInterface === 'BLUETOOTH') {
+      await handlePairRealBluetooth();
+      return;
+    }
     setIsDiscovering(true);
     try {
       const results = await printerService.discoverPrinters(selectedInterface);
@@ -291,6 +352,37 @@ export const PrintingScreen: React.FC<PrintingScreenProps> = ({ onBack }) => {
     setLanName('');
     await refreshAllData();
     showToast(`Added network printer ${lanName}`);
+  };
+
+  const handleQuickAddBtPrinter = async (name: string, width: '58MM' | '80MM', model: string) => {
+    try {
+      const printer = await printerService.quickAddBluetoothPrinter(name, width, model, true);
+      await refreshAllData();
+      showToast(`⚡ Paired and set default: ${printer.name} (${width === '58MM' ? '2-inch' : '3-inch'})`);
+    } catch (err) {
+      showToast('Bluetooth printer added to list.');
+    }
+  };
+
+  const handleAddCustomBtPrinter = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!btCustomName.trim()) return;
+
+    try {
+      const width = btCustomWidth === '58MM' ? '58MM' : '80MM';
+      const printer = await printerService.quickAddBluetoothPrinter(
+        btCustomName.trim(),
+        width,
+        `Bluetooth Thermal POS (${width === '58MM' ? '58mm' : '80mm'})`,
+        true
+      );
+      setShowAddBtModal(false);
+      setBtCustomName('');
+      await refreshAllData();
+      showToast(`⚡ Paired & set as default: ${printer.name}`);
+    } catch (err) {
+      showToast('Bluetooth printer saved.');
+    }
   };
 
   // ----------------------------------------------------------------
@@ -445,55 +537,89 @@ export const PrintingScreen: React.FC<PrintingScreenProps> = ({ onBack }) => {
               </div>
 
               {/* Action Toolbar */}
-              <div className="pt-2 border-t border-[#262634] grid grid-cols-2 gap-2">
-                <button
-                  onClick={handlePrint}
-                  className="col-span-2 py-2.5 rounded-xl bg-orange-500 hover:bg-orange-400 text-black font-bold text-xs flex items-center justify-center gap-2 shadow-md active:scale-98 transition-all"
-                >
-                  <Printer className="w-4 h-4" />
-                  <span>Print Document ({paperFormat})</span>
-                </button>
+              <div className="pt-2 border-t border-[#262634] space-y-2">
+                {/* 1-Tap Bluetooth Thermal Action Buttons */}
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    onClick={async () => {
+                      if (!selectedBill) return;
+                      const res = await printerService.printBillBluetoothEscPos(selectedBill, '58MM', settings, undefined, isReprint);
+                      showToast(res.message);
+                    }}
+                    className="py-2.5 px-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all"
+                    title="Send ESC/POS commands directly to 2-inch (58mm) Bluetooth printer"
+                  >
+                    <Bluetooth className="w-3.5 h-3.5 text-cyan-300" />
+                    <span>2" (58mm) BT</span>
+                  </button>
 
-                <button
-                  onClick={handleReprint}
-                  className="py-2 rounded-xl bg-[#252535] hover:bg-[#2F2F44] text-gray-200 border border-[#3A3A50] font-semibold text-xs flex items-center justify-center gap-1.5"
-                  title="Reprint as Duplicate Copy"
-                >
-                  <RotateCcw className="w-3.5 h-3.5 text-orange-400" />
-                  <span>Reprint</span>
-                </button>
+                  <button
+                    onClick={async () => {
+                      if (!selectedBill) return;
+                      const res = await printerService.printBillBluetoothEscPos(selectedBill, '80MM', settings, undefined, isReprint);
+                      showToast(res.message);
+                    }}
+                    className="py-2.5 px-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all"
+                    title="Send ESC/POS commands directly to 3-inch (80mm) Bluetooth printer"
+                  >
+                    <Bluetooth className="w-3.5 h-3.5 text-yellow-300" />
+                    <span>3" (80mm) BT</span>
+                  </button>
+                </div>
 
-                <button
-                  onClick={handlePrint}
-                  className="py-2 rounded-xl bg-[#252535] hover:bg-[#2F2F44] text-gray-200 border border-[#3A3A50] font-semibold text-xs flex items-center justify-center gap-1.5"
-                >
-                  <Download className="w-3.5 h-3.5 text-orange-400" />
-                  <span>PDF Print</span>
-                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={handlePrint}
+                    className="col-span-2 py-2.5 rounded-xl bg-orange-500 hover:bg-orange-400 text-black font-bold text-xs flex items-center justify-center gap-2 shadow-md active:scale-98 transition-all"
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>System Print ({paperFormat})</span>
+                  </button>
 
-                <button
-                  onClick={handleImageExport}
-                  className="py-2 rounded-xl bg-[#252535] hover:bg-[#2F2F44] text-gray-200 border border-[#3A3A50] font-semibold text-xs flex items-center justify-center gap-1.5"
-                >
-                  <ImageIcon className="w-3.5 h-3.5 text-orange-400" />
-                  <span>Save Image</span>
-                </button>
+                  <button
+                    onClick={handleReprint}
+                    className="py-2 rounded-xl bg-[#252535] hover:bg-[#2F2F44] text-gray-200 border border-[#3A3A50] font-semibold text-xs flex items-center justify-center gap-1.5"
+                    title="Reprint as Duplicate Copy"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-orange-400" />
+                    <span>Reprint</span>
+                  </button>
 
-                <button
-                  onClick={handleWhatsApp}
-                  className="py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md"
-                >
-                  <MessageSquare className="w-3.5 h-3.5" />
-                  <span>WhatsApp</span>
-                </button>
+                  <button
+                    onClick={handlePrint}
+                    className="py-2 rounded-xl bg-[#252535] hover:bg-[#2F2F44] text-gray-200 border border-[#3A3A50] font-semibold text-xs flex items-center justify-center gap-1.5"
+                  >
+                    <Download className="w-3.5 h-3.5 text-orange-400" />
+                    <span>PDF Print</span>
+                  </button>
 
-                <button
-                  onClick={handleShare}
-                  className="col-span-2 py-2 rounded-xl bg-[#20202C] hover:bg-[#282838] text-gray-200 border border-[#3A3A50] font-semibold text-xs flex items-center justify-center gap-1.5"
-                >
-                  <Share2 className="w-3.5 h-3.5 text-orange-400" />
-                  <span>System Share / Copy Text</span>
-                </button>
+                  <button
+                    onClick={handleImageExport}
+                    className="py-2 rounded-xl bg-[#252535] hover:bg-[#2F2F44] text-gray-200 border border-[#3A3A50] font-semibold text-xs flex items-center justify-center gap-1.5"
+                    title="Download High-Res JPG Image"
+                  >
+                    <Download className="w-3.5 h-3.5 text-orange-400" />
+                    <span>Download JPG</span>
+                  </button>
+
+                  <button
+                    onClick={handleWhatsApp}
+                    className="py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all"
+                    title="Send Bill as JPG Image to WhatsApp"
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    <span>WhatsApp (JPG)</span>
+                  </button>
+
+                  <button
+                    onClick={handleShare}
+                    className="col-span-2 py-2 rounded-xl bg-[#20202C] hover:bg-[#282838] text-gray-200 border border-[#3A3A50] font-semibold text-xs flex items-center justify-center gap-1.5"
+                    title="Share Bill as JPG Image or Copy"
+                  >
+                    <Share2 className="w-3.5 h-3.5 text-orange-400" />
+                    <span>Share Bill JPG Image</span>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -599,24 +725,54 @@ export const PrintingScreen: React.FC<PrintingScreenProps> = ({ onBack }) => {
                 <h3 className="font-bold text-white text-base">Thermal & Network Printer Management</h3>
               </div>
               <p className="text-xs text-gray-400 mt-1">
-                Configure ESC/POS Bluetooth, USB Thermal, and Raw TCP IP (Port 9100) devices.
+                Direct Web Bluetooth ESC/POS engine, USB Thermal, and Raw TCP IP (Port 9100) devices.
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              {selectedInterface === 'BLUETOOTH' ? (
+                <button
+                  onClick={handlePairRealBluetooth}
+                  disabled={isDiscovering}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md disabled:opacity-50 min-h-[40px]"
+                >
+                  <Bluetooth className={`w-4 h-4 text-cyan-300 ${isDiscovering ? 'animate-spin' : ''}`} />
+                  <span>{isDiscovering ? 'Connecting...' : 'Pair Bluetooth Printer'}</span>
+                </button>
+              ) : (
+                <button
+                  onClick={handleDiscover}
+                  disabled={isDiscovering}
+                  className="px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-black font-bold text-xs flex items-center gap-1.5 shadow-md disabled:opacity-50 min-h-[40px]"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isDiscovering ? 'animate-spin' : ''}`} />
+                  <span>{isDiscovering ? 'Scanning...' : `Scan ${selectedInterface}`}</span>
+                </button>
+              )}
+
               <button
-                onClick={handleDiscover}
-                disabled={isDiscovering}
-                className="px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-black font-bold text-xs flex items-center gap-1.5 shadow-md disabled:opacity-50"
+                onClick={handleCleanDemoPrinters}
+                className="px-3 py-2 rounded-xl bg-[#252535] hover:bg-red-500/20 text-gray-300 hover:text-red-400 border border-[#3A3A50] text-xs font-semibold flex items-center gap-1.5 min-h-[40px]"
+                title="Remove any demo or unverified printer entries"
               >
-                <RefreshCw className={`w-4 h-4 ${isDiscovering ? 'animate-spin' : ''}`} />
-                <span>{isDiscovering ? 'Scanning Hardware...' : `Discover ${selectedInterface} Devices`}</span>
+                <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                <span className="hidden sm:inline">Clean Demo Printers</span>
               </button>
+
+              {selectedInterface === 'BLUETOOTH' && (
+                <button
+                  onClick={() => setShowAddBtModal(true)}
+                  className="px-3.5 py-2 rounded-xl bg-[#252535] hover:bg-[#2F2F44] text-white border border-[#3A3A50] font-semibold text-xs flex items-center gap-1.5 min-h-[40px]"
+                >
+                  <Plus className="w-4 h-4 text-orange-400" />
+                  <span>Custom BT</span>
+                </button>
+              )}
 
               {selectedInterface === 'WIFI_LAN' && (
                 <button
                   onClick={() => setShowAddLanModal(true)}
-                  className="px-3.5 py-2 rounded-xl bg-[#252535] hover:bg-[#2F2F44] text-white border border-[#3A3A50] font-semibold text-xs flex items-center gap-1.5"
+                  className="px-3.5 py-2 rounded-xl bg-[#252535] hover:bg-[#2F2F44] text-white border border-[#3A3A50] font-semibold text-xs flex items-center gap-1.5 min-h-[40px]"
                 >
                   <Plus className="w-4 h-4 text-orange-400" />
                   <span>Add IP Printer</span>
@@ -625,8 +781,30 @@ export const PrintingScreen: React.FC<PrintingScreenProps> = ({ onBack }) => {
             </div>
           </div>
 
+          {/* Iframe Notice for Web Bluetooth */}
+          {isInIframe && selectedInterface === 'BLUETOOTH' && (
+            <div className="bg-blue-950/40 border border-blue-500/40 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-bold text-white">Browser Web Bluetooth Security Policy</div>
+                  <p className="text-gray-300 text-[11px] mt-0.5">
+                    Browsers (Chrome / Edge) require top-level window access to display the native Bluetooth device selector. Click the button to open in a new tab for instant 1-tap hardware pairing.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleOpenInNewWindow}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shrink-0 shadow-md min-h-[40px]"
+              >
+                <ExternalLink className="w-4 h-4" />
+                <span>Open in New Tab</span>
+              </button>
+            </div>
+          )}
+
           {/* Interface Selector Tabs */}
-          <div className="flex items-center gap-2 border-b border-[#2C2C3C] pb-2 text-xs font-semibold">
+          <div className="flex items-center gap-2 border-b border-[#2C2C3C] pb-2 text-xs font-semibold overflow-x-auto">
             {[
               { type: 'BLUETOOTH', label: 'Bluetooth Thermal', icon: Bluetooth },
               { type: 'USB', label: 'USB Direct POS', icon: Usb },
@@ -639,7 +817,7 @@ export const PrintingScreen: React.FC<PrintingScreenProps> = ({ onBack }) => {
                   setSelectedInterface(type as PrinterConnectionType);
                   setDiscoveredPrinters([]);
                 }}
-                className={`px-4 py-2 rounded-xl transition-all flex items-center gap-2 ${
+                className={`px-4 py-2 rounded-xl transition-all flex items-center gap-2 whitespace-nowrap ${
                   selectedInterface === type
                     ? 'bg-orange-500/15 text-orange-400 border border-orange-500/40'
                     : 'text-gray-400 hover:text-white bg-[#141419]'
@@ -650,6 +828,68 @@ export const PrintingScreen: React.FC<PrintingScreenProps> = ({ onBack }) => {
               </button>
             ))}
           </div>
+
+          {/* Bluetooth Instant Quick-Connect Helpers */}
+          {selectedInterface === 'BLUETOOTH' && (
+            <div className="space-y-3">
+              <div className="bg-[#181822] border border-blue-500/30 rounded-2xl p-4 space-y-3 shadow-md">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Bluetooth className="w-4 h-4 text-cyan-400" />
+                    <span className="text-xs font-bold text-white uppercase tracking-wider">
+                      Quick Connect Popular Wholesale Bluetooth Printers (1-Tap Default)
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-cyan-400 font-semibold">2-inch (58mm) & 3-inch (80mm)</span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                  {[
+                    { name: 'MPT-II Thermal', width: '58MM' as const, label: '2" (58mm) MPT-II', sub: 'Pocket POS' },
+                    { name: 'POS-58 Mobile', width: '58MM' as const, label: '2" (58mm) POS-58', sub: 'Handheld' },
+                    { name: 'Everycom EC-58', width: '58MM' as const, label: '2" (58mm) Everycom', sub: 'Bluetooth' },
+                    { name: 'POS-80 Thermal', width: '80MM' as const, label: '3" (80mm) POS-80', sub: 'Counter POS' },
+                    { name: 'TVS RP-3160 BT', width: '80MM' as const, label: '3" (80mm) TVS RP', sub: 'Countertop' },
+                    { name: 'NGX BTP-320', width: '80MM' as const, label: '3" (80mm) NGX', sub: 'High Speed' },
+                  ].map((preset) => (
+                    <button
+                      key={preset.name}
+                      onClick={() => handleQuickAddBtPrinter(preset.name, preset.width, preset.sub)}
+                      className="p-2.5 rounded-xl bg-[#121218] hover:bg-orange-500/10 border border-[#2D2D3D] hover:border-orange-500/50 text-left transition-all group"
+                    >
+                      <div className="text-[11px] font-bold text-white group-hover:text-orange-300">
+                        {preset.label}
+                      </div>
+                      <div className="text-[10px] text-gray-400 mt-0.5">{preset.sub}</div>
+                      <div className="text-[9px] text-cyan-400 font-mono mt-1 font-bold">Set Default →</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Troubleshooting Guide Card */}
+              <div className="bg-[#14141C] border border-[#2A2A38] rounded-2xl p-4 text-xs space-y-2 text-gray-300">
+                <div className="flex items-center gap-2 text-orange-400 font-bold">
+                  <Smartphone className="w-4 h-4" />
+                  <span>How to connect your Bluetooth Thermal Printer on Mobile & Tablet:</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-[11px] text-gray-400">
+                  <div className="bg-[#1A1A24] p-2.5 rounded-xl border border-[#282836]">
+                    <span className="text-white font-bold block mb-0.5">1. Turn On Printer</span>
+                    Power on your thermal printer. Ensure the blue Bluetooth light is active or blinking.
+                  </div>
+                  <div className="bg-[#1A1A24] p-2.5 rounded-xl border border-[#282836]">
+                    <span className="text-white font-bold block mb-0.5">2. Android Settings Pairing</span>
+                    Open Android <b>Settings &gt; Bluetooth</b>, tap scan, and pair your printer (PIN is usually <b>0000</b> or <b>1234</b>).
+                  </div>
+                  <div className="bg-[#1A1A24] p-2.5 rounded-xl border border-[#282836]">
+                    <span className="text-white font-bold block mb-0.5">3. Select &amp; Print</span>
+                    Tap a <b>Quick Connect</b> preset above or tap <b>Discover Devices</b> to print bills instantly!
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Discovered Printers (Unpaired) */}
           {discoveredPrinters.length > 0 && (
@@ -755,7 +995,7 @@ export const PrintingScreen: React.FC<PrintingScreenProps> = ({ onBack }) => {
                       </div>
 
                       {/* Device Action Buttons */}
-                      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-[#262634] text-xs">
+                      <div className="grid grid-cols-4 gap-1.5 pt-2 border-t border-[#262634] text-xs">
                         {p.status === 'CONNECTED' ? (
                           <button
                             onClick={() => handleDisconnect(p.id)}
@@ -782,7 +1022,7 @@ export const PrintingScreen: React.FC<PrintingScreenProps> = ({ onBack }) => {
                           className="py-1.5 rounded-xl bg-[#252535] hover:bg-[#2F2F44] text-gray-200 border border-[#3A3A50] font-semibold flex items-center justify-center gap-1"
                         >
                           <FileCheck className="w-3.5 h-3.5 text-orange-400" />
-                          <span>Test Print</span>
+                          <span>Test</span>
                         </button>
 
                         <button
@@ -795,7 +1035,17 @@ export const PrintingScreen: React.FC<PrintingScreenProps> = ({ onBack }) => {
                           }`}
                         >
                           <Star className={`w-3.5 h-3.5 ${p.isDefault ? 'fill-orange-400' : ''}`} />
-                          <span>{p.isDefault ? 'Default' : 'Set Default'}</span>
+                          <span>{p.isDefault ? 'Default' : 'Set Def'}</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleRemovePrinter(p.id)}
+                          disabled={hardwareActionLoading === p.id}
+                          className="py-1.5 rounded-xl bg-[#20202C] hover:bg-red-500/20 text-gray-400 hover:text-red-400 border border-[#3A3A50] font-semibold flex items-center justify-center gap-1"
+                          title="Delete / Remove Printer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Remove</span>
                         </button>
                       </div>
                     </div>
@@ -1205,6 +1455,92 @@ export const PrintingScreen: React.FC<PrintingScreenProps> = ({ onBack }) => {
                 className="px-4 py-2 rounded-xl bg-orange-500 text-black font-bold text-xs hover:bg-orange-400"
               >
                 Save Network Printer
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Manual Bluetooth Printer Modal */}
+      {showAddBtModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <form
+            onSubmit={handleAddCustomBtPrinter}
+            className="bg-[#1C1C24] border border-[#2D2D3D] rounded-2xl p-5 w-full max-w-md space-y-4 shadow-2xl animate-in fade-in"
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-[#2C2C3A]">
+              <div className="flex items-center gap-2">
+                <Bluetooth className="w-5 h-5 text-cyan-400" />
+                <h4 className="font-bold text-white text-sm">Add Custom Bluetooth Printer</h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddBtModal(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block text-gray-300 mb-1 font-semibold">Printer Bluetooth Name / Model</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. MPT-II, POS-58, BluePOS-80"
+                  value={btCustomName}
+                  onChange={(e) => setBtCustomName(e.target.value)}
+                  className="w-full bg-[#121217] border border-[#2D2D3D] rounded-xl px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-orange-500"
+                />
+                <p className="text-[10px] text-gray-500 mt-1">
+                  Enter the exact name as shown in your Android Bluetooth paired devices list.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-gray-300 mb-1 font-semibold">Paper Format</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBtCustomWidth('58MM')}
+                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                      btCustomWidth === '58MM'
+                        ? 'bg-orange-500/20 border-orange-500 text-orange-400'
+                        : 'bg-[#121217] border-[#2D2D3D] text-gray-400'
+                    }`}
+                  >
+                    2-inch (58mm) Pocket POS
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBtCustomWidth('80MM')}
+                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                      btCustomWidth === '80MM'
+                        ? 'bg-orange-500/20 border-orange-500 text-orange-400'
+                        : 'bg-[#121217] border-[#2D2D3D] text-gray-400'
+                    }`}
+                  >
+                    3-inch (80mm) Counter POS
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-[#2C2C3A]">
+              <button
+                type="button"
+                onClick={() => setShowAddBtModal(false)}
+                className="px-4 py-2 rounded-xl bg-[#252535] text-gray-300 text-xs font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-xl bg-orange-500 text-black font-bold text-xs hover:bg-orange-400 flex items-center gap-1.5 shadow-md"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Pair &amp; Set Default</span>
               </button>
             </div>
           </form>

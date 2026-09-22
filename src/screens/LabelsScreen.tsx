@@ -80,6 +80,7 @@ export const LabelsScreen: React.FC<LabelsScreenProps> = ({ onBack }) => {
   const [purchaseProductName, setPurchaseProductName] = useState<string>('HYPORA');
   const [purchaseQuantity, setPurchaseQuantity] = useState<number>(300);
   const [purchaseRateRupees, setPurchaseRateRupees] = useState<number>(150);
+  const [purchaseSellingPriceRupees, setPurchaseSellingPriceRupees] = useState<number>(200);
   const [purchasePrefix, setPurchasePrefix] = useState<string>('786');
   const [purchaseMode, setPurchaseMode] = useState<PurchaseLabelMode>('ONE_PER_PIECE');
   const [purchaseBundleSize, setPurchaseBundleSize] = useState<number>(25);
@@ -191,6 +192,7 @@ export const LabelsScreen: React.FC<LabelsScreenProps> = ({ onBack }) => {
       const activeItem: PurchaseLabelItem = {
         productName: purchaseProductName,
         purchaseRateRupees,
+        sellingPriceRupees: purchaseSellingPriceRupees,
         quantity: purchaseQuantity,
         supplierName: purchaseSupplierName,
         invoiceNumber: purchaseInvoiceNo
@@ -233,6 +235,7 @@ export const LabelsScreen: React.FC<LabelsScreenProps> = ({ onBack }) => {
   }, [
     purchaseProductName,
     purchaseRateRupees,
+    purchaseSellingPriceRupees,
     purchaseQuantity,
     purchasePrefix,
     purchaseMode,
@@ -267,14 +270,15 @@ export const LabelsScreen: React.FC<LabelsScreenProps> = ({ onBack }) => {
   };
 
   // Handlers for Phase 10
-  const applyPurchaseSpecificationPreset = (name: string, rate: number, qty: number, pref: string = '786') => {
+  const applyPurchaseSpecificationPreset = (name: string, rate: number, sellingRate: number, qty: number, pref: string = '786') => {
     setPurchaseProductName(name);
     setPurchaseRateRupees(rate);
+    setPurchaseSellingPriceRupees(sellingRate);
     setPurchaseQuantity(qty);
     setPurchasePrefix(pref);
     setPurchaseMode('ONE_PER_PIECE');
     setPurchaseUseRange(false);
-    showToast(`Phase 10 Preset loaded: ${name} (${qty} pcs @ ₹${rate} -> Code: ${pref}${rate})`);
+    showToast(`Phase 10 Preset loaded: ${name} (${qty} pcs, Cost: ₹${rate} -> Selling: ₹${sellingRate}, Code: ${pref}${rate})`);
   };
 
   const handlePurchaseProductSelect = (id: string) => {
@@ -282,6 +286,7 @@ export const LabelsScreen: React.FC<LabelsScreenProps> = ({ onBack }) => {
     if (p) {
       setPurchaseProductName(p.name);
       setPurchaseRateRupees(paiseToRupees(p.purchaseRatePaise) || 150);
+      setPurchaseSellingPriceRupees(paiseToRupees(p.saleRatePaise) || Math.round(paiseToRupees(p.purchaseRatePaise) * 1.33) || 200);
     }
   };
 
@@ -341,9 +346,18 @@ export const LabelsScreen: React.FC<LabelsScreenProps> = ({ onBack }) => {
       actual: bundleCount
     });
 
-    // Test 4: Range Filter
+    // Test 4: Selling Price & Margin Formula Test
+    const marginCalc = purchaseLabelService.calculateMargin(150, 200);
+    results.push({
+      test: 'Margin Formula: ((200 - 150) / 150) * 100 = 33.33% (Margin ₹50)',
+      passed: marginCalc.marginAmount === 50 && marginCalc.marginPercentage === 33.33,
+      expected: '₹50 (33.33%)',
+      actual: `₹${marginCalc.marginAmount} (${marginCalc.marginPercentage}%)`
+    });
+
+    // Test 5: Range Filter
     const rangeLabels = await purchaseLabelService.generateLabelsForProduct(
-      { productName: 'HYPORA', purchaseRateRupees: 150, quantity: 300 },
+      { productName: 'HYPORA', purchaseRateRupees: 150, sellingPriceRupees: 200, quantity: 300 },
       DEFAULT_PURCHASE_LABEL_SETTINGS,
       'ONE_PER_PIECE',
       25,
@@ -352,13 +366,13 @@ export const LabelsScreen: React.FC<LabelsScreenProps> = ({ onBack }) => {
       50
     );
     results.push({
-      test: 'Range Filter: Range 10 to 50 -> exactly 41 labels generated',
-      passed: rangeLabels.length === 41,
-      expected: 41,
-      actual: rangeLabels.length
+      test: 'Range Filter: Range 10 to 50 -> exactly 41 labels generated with Selling Price ₹200',
+      passed: rangeLabels.length === 41 && rangeLabels[0].sellingPriceDisplay === '₹200' && rangeLabels[0].purchaseCode === '786150',
+      expected: '41 labels, ₹200 display, 786150 code',
+      actual: `${rangeLabels.length} labels, ${rangeLabels[0]?.sellingPriceDisplay} display, ${rangeLabels[0]?.purchaseCode} code`
     });
 
-    // Test 5: Invariant check (Zero inventory / financial impact)
+    // Test 6: Invariant check (Zero inventory / financial impact)
     const stockBefore = (await roomDb.getAll<Product>('products')).map(p => p.currentStock);
     const suppBefore = (await roomDb.getAll<Supplier>('suppliers')).map(s => s.currentOutstandingPaise);
     
@@ -817,27 +831,27 @@ export const LabelsScreen: React.FC<LabelsScreenProps> = ({ onBack }) => {
 
               <div className="grid grid-cols-3 gap-1.5">
                 <button
-                  onClick={() => applyPurchaseSpecificationPreset('HYPORA', 150, 300, '786')}
+                  onClick={() => applyPurchaseSpecificationPreset('HYPORA', 150, 200, 300, '786')}
                   className="p-1.5 rounded-lg bg-[#22222E] hover:bg-[#2C2C3C] text-left border border-[#333344] transition-all"
                 >
                   <div className="font-bold text-white truncate">HYPORA 300 Pcs</div>
-                  <div className="text-[10px] text-sky-400 font-mono">₹150 → 786150</div>
+                  <div className="text-[10px] text-sky-400 font-mono">₹150→₹200 (786150)</div>
                 </button>
 
                 <button
-                  onClick={() => applyPurchaseSpecificationPreset('CLUB POUCH', 75, 100, '786')}
+                  onClick={() => applyPurchaseSpecificationPreset('CLUB POUCH', 75, 110, 100, '786')}
                   className="p-1.5 rounded-lg bg-[#22222E] hover:bg-[#2C2C3C] text-left border border-[#333344] transition-all"
                 >
                   <div className="font-bold text-white truncate">CLUB 100 Pcs</div>
-                  <div className="text-[10px] text-sky-400 font-mono">₹75 → 78675</div>
+                  <div className="text-[10px] text-sky-400 font-mono">₹75→₹110 (78675)</div>
                 </button>
 
                 <button
-                  onClick={() => applyPurchaseSpecificationPreset('SCHOOL HEAVY', 220, 200, '786')}
+                  onClick={() => applyPurchaseSpecificationPreset('SCHOOL HEAVY', 220, 310, 200, '786')}
                   className="p-1.5 rounded-lg bg-[#22222E] hover:bg-[#2C2C3C] text-left border border-[#333344] transition-all"
                 >
                   <div className="font-bold text-white truncate">SCHOOL 200 Pcs</div>
-                  <div className="text-[10px] text-sky-400 font-mono">₹220 → 786220</div>
+                  <div className="text-[10px] text-sky-400 font-mono">₹220→₹310 (786220)</div>
                 </button>
               </div>
             </div>
@@ -846,7 +860,7 @@ export const LabelsScreen: React.FC<LabelsScreenProps> = ({ onBack }) => {
             <div className="bg-sky-950/30 border border-sky-800/40 rounded-xl p-3 flex items-start gap-2 text-sky-300">
               <Info className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
               <div className="text-[11px] leading-relaxed">
-                <b>CRITICAL Safety:</b> Purchase labels do <b>NOT</b> increment inventory or modify supplier balance. Offline-ready generation.
+                <b>CRITICAL Safety:</b> Customer label displays <b>Selling Price</b> and encoded purchase code (e.g. 786150). Raw purchase cost is kept strictly internal.
               </div>
             </div>
 
@@ -870,7 +884,7 @@ export const LabelsScreen: React.FC<LabelsScreenProps> = ({ onBack }) => {
                   <option value="custom">-- Custom Manual Product --</option>
                   {products.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.name} (Cost: ₹{paiseToRupees(p.purchaseRatePaise)})
+                      {p.name} (Cost: ₹{paiseToRupees(p.purchaseRatePaise)} | Sell: ₹{paiseToRupees(p.saleRatePaise)})
                     </option>
                   ))}
                 </select>
@@ -887,15 +901,26 @@ export const LabelsScreen: React.FC<LabelsScreenProps> = ({ onBack }) => {
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <div>
-                  <label className="block text-gray-400 mb-1">Purchase Rate (₹)</label>
+                  <label className="block text-gray-400 mb-1">Purchase Cost (₹)</label>
                   <input
                     type="number"
                     min="1"
                     value={purchaseRateRupees}
                     onChange={(e) => setPurchaseRateRupees(Math.max(1, Number(e.target.value)))}
-                    className="w-full bg-[#121217] border border-[#2D2D3D] rounded-xl px-3 py-2 text-white font-mono font-bold focus:outline-none focus:border-sky-500"
+                    className="w-full bg-[#121217] border border-[#2D2D3D] rounded-xl px-3 py-2 text-gray-300 font-mono font-bold focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-emerald-400 font-bold mb-1">Selling Price (₹)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={purchaseSellingPriceRupees}
+                    onChange={(e) => setPurchaseSellingPriceRupees(Math.max(1, Number(e.target.value)))}
+                    className="w-full bg-[#121217] border border-emerald-500/50 rounded-xl px-3 py-2 text-emerald-400 font-mono font-bold focus:outline-none focus:border-emerald-500"
                   />
                 </div>
 
@@ -917,6 +942,19 @@ export const LabelsScreen: React.FC<LabelsScreenProps> = ({ onBack }) => {
                   </div>
                 </div>
               </div>
+
+              {/* Profit Margin Calculation Strip */}
+              {(() => {
+                const margin = purchaseLabelService.calculateMargin(purchaseRateRupees, purchaseSellingPriceRupees);
+                return (
+                  <div className="bg-[#14141E] p-2.5 rounded-xl border border-[#2A2A3E] flex items-center justify-between text-xs">
+                    <span className="text-gray-400 font-bold">Calculated Profit Margin:</span>
+                    <span className={`font-mono font-black ${margin.marginAmount >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      ₹{margin.marginAmount} per pc ({margin.marginPercentage > 0 ? '+' : ''}{margin.marginPercentage}%)
+                    </span>
+                  </div>
+                );
+              })()}
 
               <div>
                 <label className="block text-gray-400 mb-1">Total Inward Quantity (Pieces)</label>

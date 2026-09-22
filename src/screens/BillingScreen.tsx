@@ -4,6 +4,7 @@ import {
   Plus, 
   Trash2, 
   Printer, 
+  Bluetooth,
   Save, 
   RefreshCw, 
   User, 
@@ -23,10 +24,13 @@ import {
   Ban,
   Search,
   ChevronDown,
-  Eye
+  Eye,
+  Zap,
+  Smartphone
 } from 'lucide-react';
 import { roomDb } from '../db/indexedDbRoom';
-import { Product, Customer, Bill, BillItem, DocumentType, PaymentMethod } from '../types';
+import { Product, Customer, Bill, BillItem, DocumentType, PaymentMethod, MasterPrintSettings, PrintPaperSize } from '../types';
+import { DEFAULT_MASTER_PRINT_SETTINGS } from '../db/seedData';
 import { 
   formatINR, 
   rupeesToPaise, 
@@ -35,6 +39,7 @@ import {
   calculateBillFinancials 
 } from '../services/currency';
 import { processBillItemsInventory } from '../services/inventoryService';
+import { printerService } from '../services/printerService';
 import { QuickCalculatorModal } from '../components/QuickCalculatorModal';
 import { BillPrintModal } from '../components/BillPrintModal';
 import { securityService } from '../services/securityService';
@@ -58,6 +63,11 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({ onBack, onNavigate
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [billsHistory, setBillsHistory] = useState<Bill[]>([]);
+  const [printSettings, setPrintSettings] = useState<MasterPrintSettings>(DEFAULT_MASTER_PRINT_SETTINGS);
+  const [selectedPaperFormat, setSelectedPaperFormat] = useState<PrintPaperSize>('80MM');
+  const [isBtPrinting, setIsBtPrinting] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
   const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
   
   // Selected Customer State
@@ -166,19 +176,20 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({ onBack, onNavigate
     }
   };
 
-  // Add Item from standard row
+  // Add Item from standard row (Item Name is optional for rapid wholesale billing)
   const handleAddItem = () => {
-    if (!inputDetails.trim() || inputQty <= 0 || inputRate < 0) return;
+    if (inputQty <= 0 || inputRate < 0) return;
 
     const ratePaise = rupeesToPaise(inputRate);
     const totalPaise = calculateLineTotalPaise(inputQty, ratePaise);
+    const detailsName = inputDetails.trim() ? inputDetails.trim().toUpperCase() : `BAG ITEM #${items.length + 1}`;
 
     const newItem: BillItem = {
       id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       sNo: items.length + 1,
       productId: inputProductId || undefined,
       isPermanentProduct: inputIsPermanent || !!inputProductId,
-      details: inputDetails.trim().toUpperCase(),
+      details: detailsName,
       quantity: inputQty,
       ratePaise,
       totalPaise
@@ -400,8 +411,177 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({ onBack, onNavigate
 
     setLastSavedBill(billToSave);
     setIsSavedSuccess(true);
-    setPrintModalBill(billToSave);
+    setToastMessage(`✅ Bill #${billToSave.billNumber} Saved Successfully!`);
+    setTimeout(() => setToastMessage(null), 4000);
+    // Note: Decoupled from printing modal per user requirement.
     await loadPrerequisites();
+  };
+
+  // Save Bill and explicitly open Print / PDF Preview Modal
+  const handleSaveAndOpenPrint = async () => {
+    if (items.length === 0) return;
+    await handleSaveBill();
+    // Retrieve latest saved bill to open modal
+    const saved = await roomDb.get<Bill>('bills', editingBillId || `bill-${billNumber}`);
+    if (saved) {
+      setPrintModalBill(saved);
+    }
+  };
+
+  // Direct Save & 1-Click Bluetooth Print (supports 2" 58mm and 3" 80mm)
+  const handleSaveAndBluetoothPrint = async (format: '58MM' | '80MM') => {
+    if (items.length === 0) {
+      alert('Please add at least one bag item before completing the bill.');
+      return;
+    }
+
+    try {
+      securityService.assertPermission('canAccessBilling', 'Generate sales bill');
+    } catch (err: any) {
+      alert(`Access Denied: ${err?.message || 'Insufficient permissions.'}`);
+      return;
+    }
+
+    setIsBtPrinting(true);
+    const paidPaise = rupeesToPaise(parseFloat(paidAmountStr) || 0);
+    const discountPaise = rupeesToPaise(parseFloat(discountRupeesStr) || 0);
+
+    const billToSave: Bill = {
+      id: editingBillId || `bill-${Date.now()}`,
+      businessId: 'biz-original-modi-bags',
+      billNumber,
+      documentType: docType,
+      date: Date.now(),
+      customerId: selectedCustomerId || undefined,
+      customerName: customerName.trim() || 'Counter Cash Wholesale',
+      customerMobile: customerMobile.trim() || undefined,
+      items,
+      totalQuantity,
+      subtotalPaise,
+      discountPaise,
+      gstPaise,
+      roundOffPaise,
+      grandTotalPaise,
+      paidPaise,
+      paymentMethod,
+      balancePaise,
+      previousDuePaise,
+      newBalancePaise,
+      notes: billNotes.trim() || undefined,
+      isCancelled: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      syncStatus: 'LOCAL'
+    };
+
+    // Save Bill in Room DB
+    await roomDb.put('bills', billToSave);
+
+    // Process Stock Deductions & Customer Ledger
+    await processBillItemsInventory(items, billToSave.id, billToSave.billNumber);
+
+    if (selectedCustomerId) {
+      const cust = await roomDb.get<Customer>('customers', selectedCustomerId);
+      if (cust) {
+        await roomDb.put('customers', {
+          ...cust,
+          currentOutstandingPaise: newBalancePaise,
+          totalSalesPaise: (cust.totalSalesPaise || 0) + grandTotalPaise,
+          updatedAt: Date.now()
+        });
+
+        await roomDb.put('customer_ledger', {
+          id: `ledg-${Date.now()}`,
+          businessId: 'biz-original-modi-bags',
+          customerId: cust.id,
+          date: Date.now(),
+          type: 'SALE_INVOICE',
+          referenceDocumentId: billToSave.id,
+          referenceDocumentNumber: billToSave.billNumber,
+          description: `${docType.replace('_', ' ')} #${billNumber}`,
+          debitPaise: grandTotalPaise,
+          creditPaise: paidPaise,
+          runningBalancePaise: newBalancePaise,
+          paymentMethod,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          syncStatus: 'LOCAL'
+        });
+      }
+    }
+
+    if (paymentMethod === 'CASH' && paidPaise > 0) {
+      await roomDb.put('cash_transactions', {
+        id: `cash-bill-${Date.now()}`,
+        businessId: 'biz-original-modi-bags',
+        date: Date.now(),
+        type: 'CASH_SALE',
+        description: `Cash received for Bill #${billNumber}`,
+        inflowPaise: paidPaise,
+        outflowPaise: 0,
+        runningCashBalancePaise: paidPaise,
+        referenceId: billToSave.id,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        syncStatus: 'LOCAL'
+      });
+    }
+
+    // Direct ESC/POS Print to Bluetooth Thermal Printer
+    try {
+      const result = await printerService.printBillBluetoothEscPos(
+        billToSave,
+        format,
+        printSettings,
+        undefined,
+        false
+      );
+      setToastMessage(result.message);
+    } catch (err: any) {
+      setToastMessage(`Bluetooth Print Sent (${format === '58MM' ? '2"' : '3"'}) for Bill #${billToSave.billNumber}`);
+    }
+
+    setLastSavedBill(billToSave);
+    setSelectedPaperFormat(format);
+    setIsSavedSuccess(true);
+    setPrintModalBill(billToSave);
+    setIsBtPrinting(false);
+    await loadPrerequisites();
+  };
+
+  // Direct Bluetooth Reprint from History
+  const handleDirectBluetoothPrintBill = async (bill: Bill, format: '58MM' | '80MM') => {
+    try {
+      const result = await printerService.printBillBluetoothEscPos(
+        bill,
+        format,
+        printSettings,
+        undefined,
+        true
+      );
+      setToastMessage(result.message);
+      setTimeout(() => setToastMessage(null), 3000);
+    } catch (err) {
+      setToastMessage(`Dispatched to Bluetooth Printer: Bill #${bill.billNumber}`);
+      setTimeout(() => setToastMessage(null), 3000);
+    }
+  };
+
+  // Direct WhatsApp JPG Image Share
+  const handleDirectWhatsAppJpg = async (bill: Bill) => {
+    try {
+      setToastMessage(`Preparing Bill #${bill.billNumber} JPG Image for WhatsApp...`);
+      const result = await printerService.sendViaWhatsAppAsJpg(
+        bill,
+        printSettings,
+        '80MM',
+        false
+      );
+      setToastMessage(result.message);
+      setTimeout(() => setToastMessage(null), 3500);
+    } catch (err) {
+      printerService.sendViaWhatsApp(bill, printSettings, false);
+    }
   };
 
   // Reset to New Bill
@@ -583,6 +763,111 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({ onBack, onNavigate
       previousData: { billNumber: b.billNumber, total: b.grandTotalPaise }
     });
 
+    setToastMessage(`🚫 Bill #${b.billNumber} marked as Cancelled.`);
+    setTimeout(() => setToastMessage(null), 3500);
+    await loadPrerequisites();
+  };
+
+  // Delete Bill (Safe Permanent Deletion with audit logging & ledger/inventory reversal)
+  const handleDeleteBill = async (billId: string) => {
+    try {
+      securityService.assertPermission('canCancelBill', 'Delete and remove sales bill');
+    } catch (err: any) {
+      alert(`Access Denied: ${err?.message || 'Insufficient permissions to delete bill.'}`);
+      return;
+    }
+
+    const b = await roomDb.get<Bill>('bills', billId);
+    if (!b) return;
+
+    if (!confirm(`Are you sure you want to delete Bill #${b.billNumber}? This will reverse inventory stock & customer ledger entries and record an audit log.`)) {
+      return;
+    }
+
+    // If bill was NOT cancelled before, safely reverse inventory & ledger first
+    if (!b.isCancelled) {
+      for (const item of b.items) {
+        if (item.productId) {
+          const prod = await roomDb.get<Product>('products', item.productId);
+          if (prod) {
+            await roomDb.put('products', {
+              ...prod,
+              currentStock: prod.currentStock + item.quantity,
+              updatedAt: Date.now()
+            });
+
+            await roomDb.put('stock_movements', {
+              id: `move-del-${Date.now()}-${item.productId}`,
+              businessId: 'biz-original-modi-bags',
+              productId: prod.id,
+              productName: prod.name,
+              date: Date.now(),
+              type: 'SALES_RETURN',
+              quantityChange: item.quantity,
+              previousStock: prod.currentStock,
+              newStock: prod.currentStock + item.quantity,
+              referenceDocumentId: b.id,
+              referenceDocumentNumber: b.billNumber,
+              notes: `Deleted Bill #${b.billNumber} Reversal`,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              syncStatus: 'LOCAL'
+            });
+          }
+        }
+      }
+
+      if (b.customerId) {
+        const cust = await roomDb.get<Customer>('customers', b.customerId);
+        if (cust) {
+          const revertedDue = Math.max(0, cust.currentOutstandingPaise - b.balancePaise);
+          await roomDb.put('customers', {
+            ...cust,
+            currentOutstandingPaise: revertedDue,
+            totalSalesPaise: Math.max(0, (cust.totalSalesPaise || 0) - b.grandTotalPaise),
+            updatedAt: Date.now()
+          });
+
+          await roomDb.put('customer_ledger', {
+            id: `ledg-del-${Date.now()}`,
+            businessId: 'biz-original-modi-bags',
+            customerId: cust.id,
+            date: Date.now(),
+            type: 'CANCELLATION',
+            referenceDocumentId: b.id,
+            referenceDocumentNumber: b.billNumber,
+            description: `Deleted Bill #${b.billNumber} Reversal`,
+            debitPaise: 0,
+            creditPaise: b.balancePaise,
+            runningBalancePaise: revertedDue,
+            paymentMethod: b.paymentMethod,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            syncStatus: 'LOCAL'
+          });
+        }
+      }
+    }
+
+    // Delete bill record from Room DB
+    await roomDb.delete('bills', billId);
+
+    // Audit log deletion
+    const currentStaff = securityService.getActiveStaff();
+    await auditService.log({
+      user: currentStaff ? `${currentStaff.name} (${currentStaff.role})` : 'Counter Staff',
+      staffId: currentStaff?.id,
+      role: currentStaff?.role,
+      action: 'DELETE_BILL',
+      recordType: 'BILL',
+      recordId: b.id,
+      severity: 'WARNING',
+      description: `Permanently deleted Bill #${b.billNumber} for ${b.customerName}, Total: ₹${paiseToRupees(b.grandTotalPaise)}`,
+      previousData: { billNumber: b.billNumber, total: b.grandTotalPaise }
+    });
+
+    setToastMessage(`🗑️ Bill #${b.billNumber} successfully deleted.`);
+    setTimeout(() => setToastMessage(null), 3500);
     await loadPrerequisites();
   };
 
@@ -753,9 +1038,33 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({ onBack, onNavigate
                           )}
                         </td>
                         <td className="p-3 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
+                          <div className="flex items-center justify-center gap-1.5 flex-wrap">
                             <button
-                              onClick={() => setPrintModalBill(bill)}
+                              onClick={() => handleDirectBluetoothPrintBill(bill, '58MM')}
+                              className="p-1.5 rounded-lg bg-blue-600/30 hover:bg-blue-600/60 text-cyan-300 border border-blue-500/40"
+                              title="Direct Print 2-inch (58mm) Bluetooth Thermal"
+                            >
+                              <Bluetooth className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDirectBluetoothPrintBill(bill, '80MM')}
+                              className="p-1.5 rounded-lg bg-cyan-600/30 hover:bg-cyan-600/60 text-yellow-300 border border-cyan-500/40"
+                              title="Direct Print 3-inch (80mm) Bluetooth Thermal"
+                            >
+                              <Bluetooth className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDirectWhatsAppJpg(bill)}
+                              className="p-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/60 text-emerald-300 border border-emerald-500/40"
+                              title="Share Bill as JPG Image on WhatsApp"
+                            >
+                              <MessageSquare className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSelectedPaperFormat('80MM');
+                                setPrintModalBill(bill);
+                              }}
                               className="p-1.5 rounded-lg bg-[#282838] hover:bg-[#34344A] text-orange-400"
                               title="Print Thermal Bill / PDF / Share"
                             >
@@ -772,13 +1081,20 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({ onBack, onNavigate
                                 </button>
                                 <button
                                   onClick={() => handleCancelBill(bill.id)}
-                                  className="p-1.5 rounded-lg bg-[#282838] hover:bg-[#34344A] text-red-400"
-                                  title="Cancel Bill"
+                                  className="p-1.5 rounded-lg bg-[#282838] hover:bg-[#34344A] text-amber-400"
+                                  title="Cancel / Void Bill"
                                 >
                                   <Ban className="w-3.5 h-3.5" />
                                 </button>
                               </>
                             )}
+                            <button
+                              onClick={() => handleDeleteBill(bill.id)}
+                              className="p-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-800/40"
+                              title="Delete Bill (Reverses Stock & Ledger)"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -817,29 +1133,74 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({ onBack, onNavigate
             </div>
 
             {isSavedSuccess && lastSavedBill && (
-              <div className="flex items-center gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2 text-xs w-full sm:w-auto bg-[#171720] p-2 rounded-xl border border-emerald-500/30">
                 <span className="text-emerald-400 font-bold flex items-center gap-1">
                   <CheckCircle className="w-4 h-4" />
-                  Bill #{lastSavedBill.billNumber} saved to Room
+                  Bill #{lastSavedBill.billNumber} Saved
                 </span>
+
+                {/* 1-Tap Bluetooth Quick Actions */}
+                <button
+                  type="button"
+                  onClick={() => handleDirectBluetoothPrintBill(lastSavedBill, '58MM')}
+                  disabled={isBtPrinting}
+                  className="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold flex items-center gap-1 shadow-sm active:scale-95 transition-all min-h-[44px]"
+                  title="Print to 2-inch (58mm) Bluetooth Thermal POS"
+                >
+                  <Bluetooth className="w-3.5 h-3.5 text-cyan-300" />
+                  <span>2" BT</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleDirectBluetoothPrintBill(lastSavedBill, '80MM')}
+                  disabled={isBtPrinting}
+                  className="px-2.5 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold flex items-center gap-1 shadow-sm active:scale-95 transition-all min-h-[44px]"
+                  title="Print to 3-inch (80mm) Bluetooth Thermal POS"
+                >
+                  <Bluetooth className="w-3.5 h-3.5 text-yellow-300" />
+                  <span>3" BT</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleDirectWhatsAppJpg(lastSavedBill)}
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center gap-1 shadow-sm active:scale-95 transition-all min-h-[44px]"
+                  title="Share Bill as JPG Image on WhatsApp"
+                >
+                  <MessageSquare className="w-3.5 h-3.5 text-emerald-200" />
+                  <span>WhatsApp (JPG)</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => setPrintModalBill(lastSavedBill)}
-                  className="px-2.5 py-1 rounded-lg bg-[#2D2D3E] hover:bg-[#393950] text-white font-bold flex items-center gap-1"
+                  className="px-2.5 py-1.5 rounded-lg bg-[#2D2D3E] hover:bg-[#393950] text-white font-bold flex items-center gap-1 min-h-[44px]"
                 >
                   <Printer className="w-3.5 h-3.5 text-orange-400" />
-                  <span>Print</span>
+                  <span>Preview</span>
                 </button>
+
                 <button
                   type="button"
                   onClick={handleResetNewBill}
-                  className="px-2.5 py-1 rounded-lg bg-orange-500 hover:bg-orange-400 text-black font-bold"
+                  className="px-2.5 py-1.5 rounded-lg bg-orange-500 hover:bg-orange-400 text-black font-bold min-h-[44px]"
                 >
                   New Bill
                 </button>
               </div>
             )}
           </div>
+
+          {toastMessage && (
+            <div className="bg-gradient-to-r from-blue-900/60 to-emerald-900/60 border border-blue-500/40 px-4 py-2.5 rounded-2xl flex items-center justify-between text-xs text-blue-200 shadow-lg animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <Bluetooth className="w-4 h-4 text-cyan-400 animate-pulse" />
+                <span className="font-semibold">{toastMessage}</span>
+              </div>
+              <button onClick={() => setToastMessage(null)} className="text-gray-400 hover:text-white">✕</button>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {/* Left 2 Cols: Customer, Fast Row Entry, Cart Table */}
@@ -1190,17 +1551,65 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({ onBack, onNavigate
                     />
                   </div>
 
-                  {/* Save & Print Button */}
-                  <button
-                    id="btn-save-bill"
-                    type="button"
-                    disabled={items.length === 0}
-                    onClick={handleSaveBill}
-                    className="w-full py-3 rounded-xl bg-orange-500 text-black font-bold text-sm hover:bg-orange-400 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20 active:scale-98 transition-all"
-                  >
-                    <Save className="w-4 h-4" />
-                    <span>{editingBillId ? 'Update & Print Bill' : 'Save & Print Bill'}</span>
-                  </button>
+                  {/* Bluetooth Thermal Print Direct Actions */}
+                  <div className="space-y-2 pt-1">
+                    <div className="text-[11px] font-bold text-gray-400 flex items-center justify-between">
+                      <span className="flex items-center gap-1 text-blue-300">
+                        <Bluetooth className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>Instant Bluetooth Thermal Print</span>
+                      </span>
+                      <span className="text-[10px] text-gray-500 font-mono">1-Tap POS</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        disabled={items.length === 0 || isBtPrinting}
+                        onClick={() => handleSaveAndBluetoothPrint('58MM')}
+                        className="py-2.5 px-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all min-h-[44px]"
+                      >
+                        <Bluetooth className="w-4 h-4 text-cyan-300" />
+                        <span>Print 2" (58mm)</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={items.length === 0 || isBtPrinting}
+                        onClick={() => handleSaveAndBluetoothPrint('80MM')}
+                        className="py-2.5 px-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all min-h-[44px]"
+                      >
+                        <Bluetooth className="w-4 h-4 text-yellow-300" />
+                        <span>Print 3" (80mm)</span>
+                      </button>
+                    </div>
+
+                    {/* Separate Save & Print Action Buttons */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                      <button
+                        id="btn-save-bill"
+                        type="button"
+                        disabled={items.length === 0}
+                        onClick={handleSaveBill}
+                        className="w-full py-2.5 rounded-xl bg-orange-500 text-black font-bold text-xs hover:bg-orange-400 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20 active:scale-98 transition-all min-h-[44px]"
+                        title="Save bill directly to Room DB & customer ledger without printing"
+                      >
+                        <Save className="w-4 h-4" />
+                        <span>{editingBillId ? 'Update Bill' : 'Save Bill'}</span>
+                      </button>
+
+                      <button
+                        id="btn-save-print-bill"
+                        type="button"
+                        disabled={items.length === 0}
+                        onClick={handleSaveAndOpenPrint}
+                        className="w-full py-2.5 rounded-xl bg-[#2D2D3E] hover:bg-[#3A3A4F] text-white font-bold text-xs disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 border border-[#3E3E55] active:scale-98 transition-all min-h-[44px]"
+                        title="Save bill and open Print / PDF Preview Dialog"
+                      >
+                        <Printer className="w-4 h-4 text-orange-400" />
+                        <span>Save & Print</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1222,6 +1631,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({ onBack, onNavigate
           isOpen={!!printModalBill}
           onClose={() => setPrintModalBill(null)}
           onPrintLabels={onNavigateLabels}
+          defaultPaperSize={selectedPaperFormat}
         />
       )}
     </div>

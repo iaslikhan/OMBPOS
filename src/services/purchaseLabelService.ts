@@ -24,6 +24,7 @@ export interface PurchaseLabelItem {
   productName: string;
   productCode?: string;
   purchaseRateRupees: number;
+  sellingPriceRupees?: number;
   quantity: number;
   supplierName?: string;
   invoiceNumber?: string;
@@ -40,8 +41,12 @@ export interface GeneratedPurchaseLabel {
   brandName: string;
   productName: string;
   purchaseCode: string; // e.g. "786150"
-  purchaseRateDisplay: string; // e.g. "₹150"
-  rawRateRupees: number;
+  purchaseRateDisplay: string; // e.g. "₹150" (internal / encoded)
+  rawRateRupees: number; // Raw purchase cost
+  rawSellingPriceRupees: number; // Customer selling price
+  sellingPriceDisplay: string; // e.g. "₹200"
+  marginRupees: number; // e.g. ₹50
+  marginPercentage: number; // e.g. 33.33%
   barcodeType: 'CODE128' | 'QR';
   barcodeData: string;
   barcodeSvg: string;
@@ -65,6 +70,25 @@ export class PurchaseLabelService {
       PurchaseLabelService.instance = new PurchaseLabelService();
     }
     return PurchaseLabelService.instance;
+  }
+
+  /**
+   * Calculate profit margin amount and percentage:
+   * Margin Amount = Selling Price - Purchase Price
+   * Margin Percentage = ((Selling Price - Purchase Price) / Purchase Price) * 100
+   */
+  public calculateMargin(purchasePriceRupees: number, sellingPriceRupees: number): {
+    marginAmount: number;
+    marginPercentage: number;
+  } {
+    const purchase = Number(purchasePriceRupees) || 0;
+    const selling = Number(sellingPriceRupees) || 0;
+    const marginAmount = selling - purchase;
+    const marginPercentage = purchase > 0 ? (marginAmount / purchase) * 100 : 0;
+    return {
+      marginAmount: Math.round(marginAmount * 100) / 100,
+      marginPercentage: Math.round(marginPercentage * 100) / 100
+    };
   }
 
   /**
@@ -118,7 +142,15 @@ export class PurchaseLabelService {
   ): Promise<GeneratedPurchaseLabel[]> {
     const totalCount = this.calculateLabelCount(item.quantity, mode, bundleSize, manualCount);
     const purchaseCode = this.encodePurchaseCode(item.purchaseRateRupees, settings.prefix);
-    const rateDisplay = `₹${Math.round(item.purchaseRateRupees)}`;
+    const rawPurchaseRate = Math.round(item.purchaseRateRupees || 0);
+    const rawSellingPrice = item.sellingPriceRupees !== undefined && item.sellingPriceRupees > 0
+      ? Math.round(item.sellingPriceRupees)
+      : rawPurchaseRate;
+
+    const { marginAmount, marginPercentage } = this.calculateMargin(rawPurchaseRate, rawSellingPrice);
+
+    const purchaseRateDisplay = `₹${rawPurchaseRate}`;
+    const sellingPriceDisplay = `₹${rawSellingPrice}`;
     const brandName = 'ORIGINAL MODI BAGS';
 
     // Generate Code 128 SVG for vector sharpness
@@ -165,8 +197,12 @@ export class PurchaseLabelService {
         brandName,
         productName: item.productName || 'PRODUCT',
         purchaseCode,
-        purchaseRateDisplay: rateDisplay,
-        rawRateRupees: item.purchaseRateRupees,
+        purchaseRateDisplay,
+        rawRateRupees: rawPurchaseRate,
+        rawSellingPriceRupees: rawSellingPrice,
+        sellingPriceDisplay,
+        marginRupees: marginAmount,
+        marginPercentage,
         barcodeType: settings.barcodeType,
         barcodeData: purchaseCode,
         barcodeSvg,
@@ -248,8 +284,8 @@ export class PurchaseLabelService {
     this.addAscii(bytes, `${label.productName}\n`);
     bytes.push(0x1D, 0x21, 0x00); // Normal size
 
-    // Details line: CODE: 786150 | RATE: ₹150
-    this.addAscii(bytes, `CODE: ${label.purchaseCode}  RATE: ${label.purchaseRateDisplay}\n`);
+    // Details line: CODE: 786150 | PRICE: ₹200 (Selling Price for customer, Purchase Code encoded)
+    this.addAscii(bytes, `CODE: ${label.purchaseCode}  PRICE: ${label.sellingPriceDisplay}\n`);
     bytes.push(0x1B, 0x45, 0x00); // Bold OFF
 
     // Bundle or piece marker

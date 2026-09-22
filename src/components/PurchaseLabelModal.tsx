@@ -47,6 +47,7 @@ export const PurchaseLabelModal: React.FC<PurchaseLabelModalProps> = ({
   const [bundleSize, setBundleSize] = useState<number>(25);
   const [manualCount, setManualCount] = useState<number>(10);
   const [prefix, setPrefix] = useState<string>('786');
+  const [sellingPriceRupees, setSellingPriceRupees] = useState<number>(0);
   
   const [rangeFrom, setRangeFrom] = useState<number>(1);
   const [rangeTo, setRangeTo] = useState<number>(1);
@@ -57,16 +58,33 @@ export const PurchaseLabelModal: React.FC<PurchaseLabelModalProps> = ({
   const [isPrinting, setIsPrinting] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const currentItem = items[selectedItemIndex] || items[0] || {
+  const rawCurrentItem = items[selectedItemIndex] || items[0] || {
     productName: 'HYPORA',
     purchaseRateRupees: 150,
     quantity: 300
   };
 
+  const currentItem: PurchaseLabelItem = {
+    ...rawCurrentItem,
+    sellingPriceRupees: sellingPriceRupees > 0 ? sellingPriceRupees : (rawCurrentItem.sellingPriceRupees || rawCurrentItem.purchaseRateRupees)
+  };
+
+  const marginInfo = purchaseLabelService.calculateMargin(
+    currentItem.purchaseRateRupees,
+    currentItem.sellingPriceRupees || currentItem.purchaseRateRupees
+  );
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
   };
+
+  // Sync initial selling price when item changes
+  useEffect(() => {
+    if (rawCurrentItem) {
+      setSellingPriceRupees(rawCurrentItem.sellingPriceRupees || Math.round(rawCurrentItem.purchaseRateRupees * 1.33) || rawCurrentItem.purchaseRateRupees);
+    }
+  }, [selectedItemIndex, rawCurrentItem?.productName]);
 
   // Re-generate labels whenever item, mode, bundleSize, manualCount, prefix, or range changes
   useEffect(() => {
@@ -237,8 +255,22 @@ export const PurchaseLabelModal: React.FC<PurchaseLabelModalProps> = ({
 
               <div className="grid grid-cols-3 gap-2 pt-2 border-t border-[#2B2B3C]">
                 <div className="bg-[#161620] p-2 rounded-lg border border-[#262636]">
-                  <span className="text-[10px] text-gray-400 block">Purchase Rate</span>
-                  <span className="text-xs font-bold text-emerald-400">₹{Math.round(currentItem.purchaseRateRupees)}</span>
+                  <span className="text-[10px] text-gray-400 block">Purchase Cost (Internal)</span>
+                  <span className="text-xs font-bold text-gray-300">₹{Math.round(currentItem.purchaseRateRupees)}</span>
+                </div>
+                <div className="bg-[#161620] p-2 rounded-lg border border-[#262636]">
+                  <span className="text-[10px] text-sky-400 font-bold block">Selling Price (Label)</span>
+                  <div className="flex items-center text-xs font-bold text-emerald-400">
+                    <span>₹</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={sellingPriceRupees || ''}
+                      onChange={(e) => setSellingPriceRupees(Math.max(1, Number(e.target.value)))}
+                      className="w-full bg-transparent text-xs font-mono font-bold text-emerald-400 focus:outline-none ml-0.5"
+                      placeholder="200"
+                    />
+                  </div>
                 </div>
                 <div className="bg-[#161620] p-2 rounded-lg border border-[#262636]">
                   <span className="text-[10px] text-gray-400 block">Prefix</span>
@@ -250,9 +282,19 @@ export const PurchaseLabelModal: React.FC<PurchaseLabelModalProps> = ({
                     placeholder="786"
                   />
                 </div>
-                <div className="bg-[#161620] p-2 rounded-lg border border-[#262636]">
-                  <span className="text-[10px] text-gray-400 block">Generated Code</span>
-                  <span className="text-xs font-mono font-black text-amber-400 tracking-wider">
+              </div>
+
+              {/* Margin & Encoded Code Bar */}
+              <div className="flex items-center justify-between bg-[#151520] p-2 rounded-lg border border-[#2A2A3C] text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-gray-400 uppercase font-bold">Margin:</span>
+                  <span className={`font-mono font-bold ${marginInfo.marginAmount >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    ₹{marginInfo.marginAmount} ({marginInfo.marginPercentage > 0 ? '+' : ''}{marginInfo.marginPercentage}%)
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-gray-400 uppercase font-bold">Code:</span>
+                  <span className="font-mono font-black text-amber-400 tracking-wider">
                     {encodedCode}
                   </span>
                 </div>

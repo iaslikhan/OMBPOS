@@ -19,16 +19,21 @@ function assert(condition: boolean, desc: string, expected?: any, actual?: any) 
 }
 
 async function runTests() {
-  // Test Set 1: User's Exact Specification Example
-  console.log('1. User Specification Example Test (HYPORA, 300 Qty, ₹150, Prefix 786)');
+  // Test Set 1: User's Exact Specification Example (Cost ₹150, Selling ₹200, Prefix 786)
+  console.log('1. User Specification Example Test (HYPORA, 300 Qty, Cost ₹150, Selling ₹200, Prefix 786)');
   const item1: PurchaseLabelItem = {
     productName: 'HYPORA',
     purchaseRateRupees: 150,
+    sellingPriceRupees: 200,
     quantity: 300
   };
 
   const code1 = purchaseLabelService.encodePurchaseCode(item1.purchaseRateRupees, '786');
   assert(code1 === '786150', 'Code equals 786150', '786150', code1);
+
+  const margin1 = purchaseLabelService.calculateMargin(150, 200);
+  assert(margin1.marginAmount === 50, 'Margin amount is ₹50', 50, margin1.marginAmount);
+  assert(margin1.marginPercentage === 33.33, 'Margin percentage is 33.33%', 33.33, margin1.marginPercentage);
 
   const count1 = purchaseLabelService.calculateLabelCount(item1.quantity, 'ONE_PER_PIECE');
   assert(count1 === 300, 'Labels count equals 300', 300, count1);
@@ -42,8 +47,11 @@ async function runTests() {
   assert(labels1[0].brandName === 'ORIGINAL MODI BAGS', 'Brand name is ORIGINAL MODI BAGS', 'ORIGINAL MODI BAGS', labels1[0].brandName);
   assert(labels1[0].productName === 'HYPORA', 'Product name is HYPORA', 'HYPORA', labels1[0].productName);
   assert(labels1[0].purchaseCode === '786150', 'Item purchase code is 786150', '786150', labels1[0].purchaseCode);
-  assert(labels1[0].rawRateRupees === 150, 'Rate is ₹150', 150, labels1[0].rawRateRupees);
-  assert(labels1[0].purchaseRateDisplay === '₹150', 'Rate display is ₹150', '₹150', labels1[0].purchaseRateDisplay);
+  assert(labels1[0].rawRateRupees === 150, 'Purchase cost is ₹150', 150, labels1[0].rawRateRupees);
+  assert(labels1[0].rawSellingPriceRupees === 200, 'Selling price is ₹200', 200, labels1[0].rawSellingPriceRupees);
+  assert(labels1[0].sellingPriceDisplay === '₹200', 'Customer label displays Selling Price ₹200', '₹200', labels1[0].sellingPriceDisplay);
+  assert(labels1[0].marginRupees === 50, 'Label margin amount is ₹50', 50, labels1[0].marginRupees);
+  assert(labels1[0].marginPercentage === 33.33, 'Label margin percentage is 33.33%', 33.33, labels1[0].marginPercentage);
   assert(labels1[0].barcodeData === '786150', 'Barcode payload is 786150', '786150', labels1[0].barcodeData);
 
   // Test Set 2: Rate variations

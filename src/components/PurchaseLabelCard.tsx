@@ -43,7 +43,7 @@ export const PurchaseLabelCard: React.FC<PurchaseLabelCardProps> = ({ label, sca
           </div>
         </div>
 
-        {/* Code & Rate Badges (Prominent) */}
+        {/* Code & Price Badges (Prominent) */}
         <div className="flex items-center justify-center gap-2 my-1.5">
           <div className="bg-sky-50 border border-sky-300 px-2 py-0.5 rounded flex items-center gap-1">
             <span className="text-[9px] font-bold text-sky-800">CODE:</span>
@@ -53,9 +53,9 @@ export const PurchaseLabelCard: React.FC<PurchaseLabelCardProps> = ({ label, sca
           </div>
 
           <div className="bg-emerald-50 border border-emerald-300 px-2 py-0.5 rounded flex items-center gap-1">
-            <span className="text-[9px] font-bold text-emerald-800">RATE:</span>
+            <span className="text-[9px] font-bold text-emerald-800">PRICE:</span>
             <span className="text-xs font-black font-mono text-emerald-950">
-              {label.purchaseRateDisplay}
+              {label.sellingPriceDisplay}
             </span>
           </div>
         </div>

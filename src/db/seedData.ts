@@ -551,67 +551,6 @@ export const DEFAULT_MASTER_PRINT_SETTINGS: MasterPrintSettings = {
   syncStatus: 'LOCAL'
 };
 
-export const INITIAL_PRINTERS: PrinterDevice[] = [
-  {
-    id: 'printer-bt-01',
-    businessId: 'biz-original-modi-bags',
-    name: 'TVS RP-3160 Gold 80mm BT',
-    type: 'BLUETOOTH',
-    status: 'CONNECTED',
-    address: '00:11:22:33:44:55',
-    paperWidth: '80MM',
-    isDefault: true,
-    batteryLevel: 95,
-    model: 'RP-3160 Gold Thermal',
-    lastConnectedAt: Date.now(),
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    syncStatus: 'LOCAL'
-  },
-  {
-    id: 'printer-bt-02',
-    businessId: 'biz-original-modi-bags',
-    name: 'Everycom EC-58 Portable BT',
-    type: 'BLUETOOTH',
-    status: 'DISCONNECTED',
-    address: '88:25:83:F1:4D:21',
-    paperWidth: '58MM',
-    isDefault: false,
-    batteryLevel: 80,
-    model: 'EC-58 Mini POS',
-    lastConnectedAt: Date.now() - 3600000,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    syncStatus: 'LOCAL'
-  },
-  {
-    id: 'printer-usb-01',
-    businessId: 'biz-original-modi-bags',
-    name: 'Epson TM-T82X USB POS',
-    type: 'USB',
-    status: 'DISCONNECTED',
-    address: 'VID_04B8&PID_0E15',
-    paperWidth: '80MM',
-    isDefault: false,
-    model: 'TM-T82X Heavy Duty',
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    syncStatus: 'LOCAL'
-  },
-  {
-    id: 'printer-lan-01',
-    businessId: 'biz-original-modi-bags',
-    name: 'Posta Godown Network Printer',
-    type: 'WIFI_LAN',
-    status: 'DISCONNECTED',
-    address: '192.168.1.150:9100',
-    paperWidth: 'A4',
-    isDefault: false,
-    model: 'HP LaserJet M1005 (Raw 9100)',
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    syncStatus: 'LOCAL'
-  }
-];
+export const INITIAL_PRINTERS: PrinterDevice[] = [];
 
 
