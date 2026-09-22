@@ -1,0 +1,6 @@
+{
+  "name": "Original Modi Bags Business Manager",
+  "description": "Comprehensive business management system for wholesale bag business covering Quick Billing, Customer Ledger, Inventory, Purchases, Expenses, Cash, Labels, Reports, and Cloud Sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
