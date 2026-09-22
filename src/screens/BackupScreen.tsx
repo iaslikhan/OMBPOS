@@ -162,7 +162,7 @@ export const BackupScreen: React.FC<BackupScreenProps> = ({ onBack, onNavigateIm
         let tblCount = 0;
         if (parsed.tables && typeof parsed.tables === 'object') {
           tblCount = Object.keys(parsed.tables).length;
-          totalRecs = Object.values(parsed.tables).reduce((acc: number, cur: any) => acc + (Array.isArray(cur) ? cur.length : 0), 0);
+          totalRecs = (Object.values(parsed.tables) as any[]).reduce((acc: number, cur: any) => acc + (Array.isArray(cur) ? cur.length : 0), 0);
         }
 
         setParsedPreview({

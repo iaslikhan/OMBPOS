@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.originalmodibags.businessmanager"
+    namespace = "com.originalmodibags.pos"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.originalmodibags.businessmanager"
+        applicationId = "com.originalmodibags.pos"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -20,9 +20,19 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("release.keystore")
+            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "modibags2026"
+            keyAlias = System.getenv("KEY_ALIAS") ?: "modibags"
+            keyPassword = System.getenv("KEY_PASSWORD") ?: "modibags2026"
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -46,6 +56,8 @@ android {
 
 dependencies {
     // Jetpack Compose & Material 3
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)
